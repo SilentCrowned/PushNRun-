@@ -1,7 +1,7 @@
 # modules
 import pygame
 import asyncio
-import time
+from pathlib import Path
 from config import *
 from menuManager import *
 from levelManager import MazeGenerator
@@ -11,8 +11,9 @@ from lavaManager import Lava
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption(f"PUSH N RUN! (LEVEL {level})")
-clock = pygame.time.Clock()
 FONT = pygame.font.SysFont(None, 32)
+clock = pygame.time.Clock()
+
 
 # World / level setup
 WORLD_WIDTH, WORLD_HEIGHT = WIDTH * WORLD_SCALE, HEIGHT * WORLD_SCALE
@@ -28,8 +29,8 @@ walls = maze.get_wall_rects(thickness=WALL_THICKNESS)
 # Declaring Objects — spawn at the maze's start cell instead of a
 # hardcoded position, since the maze is now much bigger than the screen.
 spawn_x, spawn_y = maze.spawn_point()
-runner = Player(spawn_x, spawn_y, 5, BLUE)
-pusher = Player(spawn_x + 34, spawn_y, 3, RED)
+runner = Player(spawn_x, spawn_y, 5, BLUE, FONT)
+pusher = Player(spawn_x + 34, spawn_y, 3, RED, FONT)
 
 camera = Camera(WIDTH, HEIGHT, WORLD_WIDTH, WORLD_HEIGHT)
 lava = Lava(
@@ -39,10 +40,14 @@ lava = Lava(
     rise_amount=LAVA_RISE_AMOUNT,
 )
 
+#Loading Skins
+skin_folder = Path("PushNRun!/assets/players/")
+runner.skins = [f.stem for f in skin_folder.glob("*.png")]
+pusher.skins = [f.stem for f in skin_folder.glob("*.png")]
+
 # Game States
-running = True
-now = 0
-then = 0
+running = False
+menu = True
 debug_mode = False
 debug_task = None  # holds the currently running debug coroutine, if any
 
@@ -80,18 +85,25 @@ def reset():
 
 
 async def debug():
-    global then
     print(f"{'=' * 15}\nDEBUG MODE\n{'=' * 15}")
     while debug_mode:
-        print("Now\tThen\tLevel\tLava\tPlayer Position\nSEED")
-        print(f"{now}\t{then}\t{level}\t{'ON' if lava.enabled else 'OFF'}\tx:{runner.rect.x},y:{runner.rect.y}\t{SEED}")
+        print("Level\tLava\tPlayer Position\nSEED")
+        print(f"{level}\t{'ON' if lava.enabled else 'OFF'}\tx:{runner.rect.x},y:{runner.rect.y}\t{SEED}")
         await asyncio.sleep(2)
     await asyncio.sleep(5)
-    then = now
+
 
 
 async def main():
     global running, now, debug_mode, debug_task
+    
+    while menu:
+        screen.fill(WHITE)
+        
+        runner.draw_static(screen, 50, h_midpoint)
+        
+        pygame.display.flip()
+        clock.tick(60)
 
     while running:
         # clock.get_time() reflects the previous frame's duration
@@ -99,7 +111,6 @@ async def main():
         # first frame is 0, which is fine since nothing time-based fires instantly.
         dt = clock.get_time() / 1000.0
         keys = pygame.key.get_pressed()
-        now = pygame.time.get_ticks()
 
         # Events
         for e in pygame.event.get():

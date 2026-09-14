@@ -1,16 +1,18 @@
 import pygame
 
-global LEVEL
-level = 1
 WIDTH, HEIGHT = 1000, 500
 CELL_SIZE = 60
 SEED = "Cheese"
+
+level = 1
+
+h_midpoint = HEIGHT / 2
 
 
 # LEVEL / WORLD
 WORLD_SCALE = 3          # maze world is this many times bigger than the screen
 WALL_THICKNESS = 4       # used for BOTH drawing and collision so they always match
-MIN_CELL_SIZE = 40       # floor for per-level shrinking, keeps corridors wide enough for a 30px player
+MIN_CELL_SIZE = 40       # floor for per-level shrinking; must stay bigger than the
 SHRINK_PER_LEVEL = 4     # cell_size lost per level, before hitting MIN_CELL_SIZE
 
 # LAVA MECHANIC
@@ -43,4 +45,3 @@ MODIFIERS = [
     ("Rush", {"dash":2.0}),
     ("Panic", {"swap":True})
 ]
-
