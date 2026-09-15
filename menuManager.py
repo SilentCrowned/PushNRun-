@@ -3,7 +3,7 @@ from config import BLACK, GRAY, BLUE, RED, SPRINT_MULTIPLIER, SPRINT_DURATION, S
 
 
 class Player:
-    def __init__(self, x, y, speed, color, font, skin_dir="PushNRun!/assets/players",
+    def __init__(self, x, y, speed, color, font, skin_dir="assets/players",
                  can_push=False, can_sprint=False):
         self.x = x
         self.y = y

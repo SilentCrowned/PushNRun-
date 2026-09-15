@@ -92,7 +92,7 @@ lava = Lava(
 
 # Loading skins — glob() on a missing folder just returns no matches
 # (skins stays []), so this is safe even before assets exist.
-skin_folder = Path("PushNRun!/assets/players/")
+skin_folder = Path("assets/players/")
 runner.skins = [f.stem for f in skin_folder.glob("*.png")]
 pusher.skins = [f.stem for f in skin_folder.glob("*.png")]
 
