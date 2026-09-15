@@ -2,8 +2,11 @@
 Seeded maze generator for pygame.
 
 Uses recursive backtracking (randomized depth-first search) on a
-grid of cells. The same seed always produces the exact same maze,
-so you can tie a seed to a level number, a daily challenge, etc.
+grid of cells, then optionally "braids" the result by knocking down
+some extra walls to add loops/alternate routes. The same seed always
+produces the exact same maze (and the same braiding, obstacle
+placement, and modifier), so you can tie a seed to a level number, a
+daily challenge, etc.
 """
 
 import random
@@ -14,6 +17,7 @@ from config import *
 
 class MazeGenerator:
     OPPOSITE = {'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E'}
+    FINISH_SCALE = 0.85  # finish marker covers most of its cell, so two players can both stand in it
 
     def __init__(self, cols, rows, cell_size, seed=None, level=1):
         """
@@ -47,7 +51,12 @@ class MazeGenerator:
         # reachable, since recursive backtracking visits every cell).
         self.start_cell = (0, 0)
         self.finish_cell = (self.rows - 1, self.cols - 1)
-        self.finish_rect = self._cell_marker_rect(self.finish_cell)
+        self.finish_rect = self._cell_marker_rect(self.finish_cell, self.FINISH_SCALE)
+
+        # Populated by generate_features(); empty until then.
+        self.box_spawns = []
+        self.trap_spawns = []
+        self.gate_specs = []
 
     @classmethod
     def fit_to_screen(cls, width, height, cell_size, seed=None, center=True):
@@ -71,7 +80,7 @@ class MazeGenerator:
 
     @classmethod
     def generate_level(cls, world_width, world_height, base_cell_size, level=1, seed=None,
-                        min_cell_size=40, shrink_per_level=4, center=True):
+                        min_cell_size=40, shrink_per_level=4, center=True, braid_probability=None):
         """
         Build a maze for a given difficulty `level`, sized to fill a
         world_width x world_height area (e.g. WIDTH*WORLD_SCALE,
@@ -80,17 +89,18 @@ class MazeGenerator:
         Difficulty scaling: cell_size shrinks by `shrink_per_level`
         pixels per level (down to `min_cell_size`), while the world's
         pixel dimensions stay constant. A smaller cell_size packs more
-        cells into the same area, which means more branching corridors,
-        more turns, and a longer effective path to the finish — i.e. a
-        harder maze — without changing how big the level looks/scrolls.
+        cells into the same area — more turns, more decisions — i.e. a
+        harder maze, without changing how big the level looks/scrolls.
 
-        min_cell_size exists so corridors never shrink smaller than a
-        player can physically fit through (Player is a 30x30 rect).
+        After generation, this braids in extra loops (see _braid) so
+        the maze has many openings/alternate routes rather than a
+        single forced path, then procedurally places boxes, traps, and
+        lever/gate pairs, with counts that scale up with `level` (via
+        config's BOXES_BASE/BOXES_PER_LEVEL etc).
 
-        Each level gets a distinct-but-deterministic maze: the seed is
-        combined with the level number, so the same (seed, level) pair
-        always reproduces the same maze, but level 2 isn't just level 1
-        redrawn.
+        Each level gets a distinct-but-deterministic layout: the seed
+        is combined with the level number, so the same (seed, level)
+        pair always reproduces the same maze/obstacles/modifier.
         """
         cell_size = max(min_cell_size, base_cell_size - (level - 1) * shrink_per_level)
         cols = max(2, world_width // cell_size)
@@ -99,6 +109,14 @@ class MazeGenerator:
         level_seed = f"{seed}-L{level}" if seed is not None else None
         maze = cls(cols, rows, cell_size, seed=level_seed, level=level)
         maze._center_in(world_width, world_height, center)
+
+        maze._braid(braid_probability if braid_probability is not None else BRAID_PROBABILITY)
+
+        num_boxes = BOXES_BASE + (level - 1) * BOXES_PER_LEVEL
+        num_traps = TRAPS_BASE + (level - 1) * TRAPS_PER_LEVEL
+        num_levers = LEVERS_BASE + (level - 1) * LEVERS_PER_LEVEL
+        maze.generate_features(num_boxes, num_traps, num_levers)
+
         return maze
 
     def _center_in(self, width, height, center):
@@ -109,7 +127,7 @@ class MazeGenerator:
         else:
             self.origin = (0, 0)
         # origin moved, so the finish marker needs to be recomputed
-        self.finish_rect = self._cell_marker_rect(self.finish_cell)
+        self.finish_rect = self._cell_marker_rect(self.finish_cell, self.FINISH_SCALE)
 
     def _cell_marker_rect(self, cell, scale=0.5):
         """A small centered rect inside a given (row, col) cell, in world space."""
@@ -120,6 +138,13 @@ class MazeGenerator:
         rect = pygame.Rect(0, 0, size, size)
         rect.center = (ox + c * cs + cs // 2, oy + r * cs + cs // 2)
         return rect
+
+    def cell_center(self, cell):
+        """World-space pixel center of a (row, col) cell."""
+        r, c = cell
+        ox, oy = self.origin
+        cs = self.cell_size
+        return (ox + c * cs + cs // 2, oy + r * cs + cs // 2)
 
     def spawn_point(self, padding=8):
         """World-space (x, y) pixel position near the start cell, for placing a player."""
@@ -153,39 +178,100 @@ class MazeGenerator:
             else:
                 stack.pop()  # dead end, backtrack
 
-    def _wall_rects(self, origin, thickness):
+    def _braid(self, probability):
         """
-        Build the solid rectangle for every standing wall segment.
-        Shared by draw() and get_wall_rects() so what's rendered and
-        what's collidable are always exactly the same shape — no
-        mismatch between what you see and what blocks the player.
+        After the perfect maze is generated, add loops by randomly
+        knocking down some of the *remaining* walls between adjacent
+        cells. A recursive-backtracker maze has exactly one path
+        between any two cells; braiding adds extra connections, which
+        is what turns it into a maze with "many openings" rather than
+        one single forced corridor.
+        """
+        for r in range(self.rows):
+            for c in range(self.cols):
+                for direction, dr, dc in (('N', -1, 0), ('S', 1, 0), ('E', 0, 1), ('W', 0, -1)):
+                    nr, nc = r + dr, c + dc
+                    if not (0 <= nr < self.rows and 0 <= nc < self.cols):
+                        continue
+                    if self.grid[r][c][direction] and self.rng.random() < probability:
+                        self.grid[r][c][direction] = False
+                        self.grid[nr][nc][self.OPPOSITE[direction]] = False
 
-        Each segment is extended by `thickness` past the cell edge
-        on both ends. Without that, two walls meeting at a corner
-        leave a tiny diagonal gap a fast-moving player can clip
-        through; the overlap closes that gap so the maze is truly
-        solid, not just mostly solid.
+    def generate_features(self, num_boxes, num_traps, num_levers, wall_thickness=None):
+        """
+        Populate self.box_spawns / self.trap_spawns / self.gate_specs
+        with world-space placements, using this maze's own seeded RNG
+        so the same (seed, level) always gets the same layout.
+
+        gate_specs is a list of (segment_rect, lever_center) pairs:
+        lever_center is where to put a Lever, and segment_rect is an
+        existing *open* passage next to it that gets turned into a
+        Gate — so the gate sits at a real chokepoint rather than an
+        arbitrary spot.
+
+        This is a best-effort placement, not a guaranteed-solvable
+        puzzle generator: with braiding adding loops, closing one
+        gated passage usually still leaves another route around,
+        which is fine for a "many openings" maze but means a given
+        gate isn't always strictly mandatory to reach the finish.
+        """
+        wall_thickness = wall_thickness if wall_thickness is not None else WALL_THICKNESS
+
+        all_cells = [(r, c) for r in range(self.rows) for c in range(self.cols)
+                     if (r, c) not in (self.start_cell, self.finish_cell)]
+        self.rng.shuffle(all_cells)
+
+        box_cells = all_cells[:num_boxes]
+        trap_cells = all_cells[num_boxes:num_boxes + num_traps]
+        lever_cells = all_cells[num_boxes + num_traps:num_boxes + num_traps + num_levers]
+
+        self.box_spawns = [self.cell_center(cell) for cell in box_cells]
+        self.trap_spawns = [self.cell_center(cell) for cell in trap_cells]
+
+        self.gate_specs = []
+        for cell in lever_cells:
+            r, c = cell
+            open_dirs = [d for d in ('N', 'S', 'E', 'W') if not self.grid[r][c][d]]
+            if not open_dirs:
+                continue
+            direction = self.rng.choice(open_dirs)
+            segment_rect = self._wall_segment_rect(self.origin, r, c, direction, wall_thickness)
+            self.gate_specs.append((segment_rect, self.cell_center(cell)))
+
+        return self.box_spawns, self.trap_spawns, self.gate_specs
+
+    def _wall_segment_rect(self, origin, r, c, direction, thickness):
+        """
+        The solid rectangle for one wall segment (one cell, one side).
+        Extended by `thickness` past the cell edge on both ends so
+        two walls meeting at a corner don't leave a tiny diagonal gap
+        a fast-moving player could clip through.
         """
         ox, oy = origin
         cs = self.cell_size
         half = thickness // 2
-        rects = []
+        x = ox + c * cs
+        y = oy + r * cs
 
+        if direction == 'N':
+            return pygame.Rect(x - half, y - half, cs + thickness, thickness)
+        if direction == 'S':
+            return pygame.Rect(x - half, y + cs - half, cs + thickness, thickness)
+        if direction == 'W':
+            return pygame.Rect(x - half, y - half, thickness, cs + thickness)
+        if direction == 'E':
+            return pygame.Rect(x + cs - half, y - half, thickness, cs + thickness)
+        raise ValueError(f"unknown wall direction: {direction!r}")
+
+    def _wall_rects(self, origin, thickness):
+        """Every standing wall segment, as solid rects. Shared by draw() and get_wall_rects()."""
+        rects = []
         for r in range(self.rows):
             for c in range(self.cols):
-                x = ox + c * cs
-                y = oy + r * cs
                 cell = self.grid[r][c]
-
-                if cell['N']:
-                    rects.append(pygame.Rect(x - half, y - half, cs + thickness, thickness))
-                if cell['S']:
-                    rects.append(pygame.Rect(x - half, y + cs - half, cs + thickness, thickness))
-                if cell['W']:
-                    rects.append(pygame.Rect(x - half, y - half, thickness, cs + thickness))
-                if cell['E']:
-                    rects.append(pygame.Rect(x + cs - half, y - half, thickness, cs + thickness))
-
+                for direction in ('N', 'S', 'E', 'W'):
+                    if cell[direction]:
+                        rects.append(self._wall_segment_rect(origin, r, c, direction, thickness))
         return rects
 
     def draw(self, surface, origin=None, color=(255, 255, 255), wall_thickness=6, camera=None):
@@ -196,9 +282,8 @@ class MazeGenerator:
 
         If `camera` is given, wall rects are offset into screen space
         via camera.apply(), and rects fully outside the camera's
-        visible area are skipped — this keeps drawing cheap even for
-        a big, dense high-level maze, since only what's on screen
-        actually gets rendered.
+        visible area are skipped — keeps drawing cheap even for a
+        big, dense high-level maze.
         """
         o = origin if origin is not None else self.origin
         visible = camera.visible_world_rect() if camera is not None else None
@@ -234,13 +319,13 @@ if __name__ == "__main__":
     win = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption(f"Maze preview — seed: {SEED}")
     clock = pygame.time.Clock()
+    font = pygame.font.SysFont(None, 28)
 
     maze = MazeGenerator.fit_to_screen(WIDTH, HEIGHT, CELL_SIZE, seed=SEED)
     walls = maze.get_wall_rects()
 
-    from menuManager import Player
     sx, sy = maze.spawn_point()
-    player = Player(sx, sy, 4, (0, 150, 255))
+    player = Player(sx, sy, 4, (0, 150, 255), font)
 
     running = True
     while running:
@@ -249,7 +334,7 @@ if __name__ == "__main__":
                 running = False
 
         keys = pygame.key.get_pressed()
-        player.move(1, keys)
+        player.move(1, keys, walls=walls)
 
         win.fill((20, 20, 20))
         maze.draw(win)
