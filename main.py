@@ -215,7 +215,8 @@ async def main():
             f"Runner ready: {runner_ready}   Pusher ready: {pusher_ready}",
             True, BLACK,
         )
-
+        screen.blit(status, (20, screen_height - 60))
+        
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 menu = False

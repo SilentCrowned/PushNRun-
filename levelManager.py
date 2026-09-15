@@ -311,9 +311,17 @@ class MazeGenerator:
 
 
 if __name__ == "__main__":
-    # Quick standalone preview: run this file directly to see a maze
-    # sized to fit a fixed resolution, with a player that can't walk
-    # through the walls and reaches a finish marker.
+    # Quick standalone preview: run this file directly to see the maze
+    # at its true, accurate scale — built with generate_level(), the
+    # same method the real game uses, not the smaller screen-fitted
+    # fit_to_screen() — with a player that can't walk through the
+    # walls and reaches a finish marker.
+    #
+    # The real maze is much bigger than a normal window, so the whole
+    # preview is scaled down to fit inside (WIDTH, HEIGHT) while
+    # keeping its aspect ratio and staying centered. Walls are drawn
+    # thin here (not the in-game WALL_THICKNESS) so a shrunk-down maze
+    # doesn't turn into a solid white blob.
     pygame.init()
 
     win = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -321,11 +329,33 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 28)
 
-    maze = MazeGenerator.fit_to_screen(WIDTH, HEIGHT, CELL_SIZE, seed=SEED)
-    walls = maze.get_wall_rects()
+    PREVIEW_WALL_THICKNESS = 2  # thin, regardless of the in-game WALL_THICKNESS
+
+    world_width, world_height = WIDTH * WORLD_SCALE, HEIGHT * WORLD_SCALE
+    maze = MazeGenerator.generate_level(
+        world_width, world_height, CELL_SIZE,
+        level=1, seed=SEED,
+        min_cell_size=MIN_CELL_SIZE, shrink_per_level=SHRINK_PER_LEVEL,
+    )
+    walls = maze.get_wall_rects(thickness=PREVIEW_WALL_THICKNESS)
+
+    # Scale everything down to fit the window if the true map is bigger
+    # than it; stays 1.0 (no shrinking) if it already fits.
+    scale = min(1.0, WIDTH / world_width, HEIGHT / world_height)
+    scaled_w, scaled_h = int(world_width * scale), int(world_height * scale)
+    offset_x, offset_y = (WIDTH - scaled_w) // 2, (HEIGHT - scaled_h) // 2
+
+    def to_preview(rect):
+        """Map a world-space rect onto the scaled, centered preview window."""
+        return pygame.Rect(
+            offset_x + int(rect.x * scale),
+            offset_y + int(rect.y * scale),
+            max(1, int(rect.width * scale)),
+            max(1, int(rect.height * scale)),
+        )
 
     sx, sy = maze.spawn_point()
-    player = Player(sx, sy, 4, (0, 150, 255), font)
+    player = Player(sx, sy, 10, (0, 150, 255), font)
 
     running = True
     while running:
@@ -337,9 +367,11 @@ if __name__ == "__main__":
         player.move(1, keys, walls=walls)
 
         win.fill((20, 20, 20))
-        maze.draw(win)
-        maze.draw_finish(win)
-        player.draw(win)
+        for wall in walls:
+            pygame.draw.rect(win, (255, 255, 255), to_preview(wall))
+        pygame.draw.rect(win, (80, 220, 120), to_preview(maze.finish_rect))
+        pygame.draw.rect(win, player.color, to_preview(player.rect))
+
         pygame.display.flip()
         clock.tick(60)
 
